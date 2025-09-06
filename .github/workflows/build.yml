@@ -1,0 +1,54 @@
+name: build-archlinuxarm
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - PKGBUILD
+      - .github/workflows/**
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build package (${{ matrix.pkg_arch }})
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/arm64
+            pkg_arch: aarch64
+          - platform: linux/arm/v7
+            pkg_arch: armv7h
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build in ArchLinuxARM container
+        run: |
+          set -euxo pipefail
+          docker run --rm \
+            --platform=${{ matrix.platform }} \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            ghcr.io/ny-a/docker-archlinuxarm:base-devel \
+            bash -lc '
+              set -euxo pipefail
+              pacman -Syu --noconfirm --needed \
+                git cmake meson boost opencv libcamera libjpeg-turbo libtiff libpng libexif
+
+              useradd -m builder
+              chown -R builder:builder /workspace
+
+              sudo -u builder makepkg
+            '
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpicam-apps-${{ matrix.pkg_arch }}
+          path: "*.pkg.tar.*"
