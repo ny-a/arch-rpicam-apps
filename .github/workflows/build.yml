@@ -31,8 +31,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          PKGVER=$(sed -n 's/^pkgver=//p' PKGBUILD | head -n1 | tr -d '"'\'' )
-          PKGREL=$(sed -n 's/^pkgrel=//p' PKGBUILD | head -n1 | tr -d '"'\'' )
+          PKGVER=$(sed -n 's/^pkgver=//p' PKGBUILD | head -n1 )
+          PKGREL=$(sed -n 's/^pkgrel=//p' PKGBUILD | head -n1 )
           if [ -z "${PKGVER}" ] || [ -z "${PKGREL}" ]; then
             echo "Failed to parse pkgver/pkgrel from PKGBUILD" >&2
             exit 1
