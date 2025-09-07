@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
     paths:
       - PKGBUILD
       - .github/workflows/**
@@ -15,40 +13,6 @@ permissions:
   packages: write
 
 jobs:
-  tag_from_pkgbuild:
-    name: Tag from PKGBUILD
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Create and push tag from PKGBUILD
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          PKGVER=$(sed -n 's/^pkgver=//p' PKGBUILD | head -n1 )
-          PKGREL=$(sed -n 's/^pkgrel=//p' PKGBUILD | head -n1 )
-          if [ -z "${PKGVER}" ] || [ -z "${PKGREL}" ]; then
-            echo "Failed to parse pkgver/pkgrel from PKGBUILD" >&2
-            exit 1
-          fi
-          TAG="v${PKGVER}-${PKGREL}"
-          echo "Computed tag: ${TAG}"
-          if git ls-remote --tags origin | awk '{print $2}' | grep -qx "refs/tags/${TAG}"; then
-            echo "Tag ${TAG} already exists on remote. Skipping."
-            exit 0
-          fi
-          git config user.name "${GITHUB_ACTOR}"
-          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
-          git tag -a "${TAG}" -m "Release ${TAG}"
-          # Push using the already-configured credentials from checkout
-          git push origin "refs/tags/${TAG}"
-
   build:
     name: Build package (${{ matrix.pkg_arch }})
     runs-on: ubuntu-24.04-arm
@@ -90,14 +54,47 @@ jobs:
           path: "*.pkg.tar.*"
 
   release:
-    name: Publish release
+    name: Tag and Publish Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse tag from PKGBUILD
+        id: pkg_tag
+        run: |
+          PKGVER=$(sed -n 's/^pkgver=//p' PKGBUILD | head -n1 )
+          PKGREL=$(sed -n 's/^pkgrel=//p' PKGBUILD | head -n1 )
+          if [ -z "${PKGVER}" ] || [ -z "${PKGREL}" ]; then
+            echo "Failed to parse pkgver/pkgrel from PKGBUILD" >&2
+            exit 1
+          fi
+          TAG="v${PKGVER}-${PKGREL}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists and create/push if needed (and quit if exists)
+        id: tagcheck
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.pkg_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --tags origin | awk '{print $2}' | grep -qx "refs/tags/${TAG}"; then
+            echo "Tag ${TAG} already exists on remote. Quitting."
+            exit 0
+          fi
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "refs/tags/${TAG}"
+
       - name: Download built packages
+        if: steps.tagcheck.outcome == 'success'
         uses: actions/download-artifact@v4
         with:
           pattern: rpicam-apps-*
@@ -105,14 +102,16 @@ jobs:
           path: dist
 
       - name: List downloaded files
+        if: steps.tagcheck.outcome == 'success'
         run: ls -lah dist
 
       - name: Create/Update GitHub Release (gh CLI)
+        if: steps.tagcheck.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.pkg_tag.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
           # Create the release if it doesn't exist, otherwise continue
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
           # Upload all pkg artifacts as raw files (no additional zipping)
